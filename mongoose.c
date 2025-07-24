@@ -1252,7 +1252,7 @@ static int p_stat(const char *path, size_t *size, time_t *mtime) {
 #if MG_ARCH == MG_ARCH_WIN32
   struct _stati64 st;
   wchar_t tmp[MG_PATH_MAX];
-  MultiByteToWideChar(CP_UTF8, 0, path, -1, tmp, sizeof(tmp) / sizeof(tmp[0]));
+  MultiByteToWideChar(CP_ACP, 0, path, -1, tmp, sizeof(tmp) / sizeof(tmp[0]));
   if (_wstati64(tmp, &st) != 0) return 0;
   // If path is a symlink, windows reports 0 in st.st_size.
   // Get a real file size by opening it and jumping to the end
@@ -1314,10 +1314,10 @@ static int to_wchar(const char *path, wchar_t *wbuf, size_t wbuf_len) {
   p = buf + strlen(buf) - 1;
   while (p > buf && p[-1] != ':' && (p[0] == '\\' || p[0] == '/')) *p-- = '\0';
   memset(wbuf, 0, wbuf_len * sizeof(wchar_t));
-  ret = MultiByteToWideChar(CP_UTF8, 0, buf, -1, wbuf, (int) wbuf_len);
+  ret = MultiByteToWideChar(CP_ACP, 0, buf, -1, wbuf, (int) wbuf_len);
   // Convert back to Unicode. If doubly-converted string does not match the
   // original, something is fishy, reject.
-  WideCharToMultiByte(CP_UTF8, 0, wbuf, (int) wbuf_len, buf2, sizeof(buf2),
+  WideCharToMultiByte(CP_ACP, 0, wbuf, (int) wbuf_len, buf2, sizeof(buf2),
                       NULL, NULL);
   if (strcmp(buf, buf2) != 0) {
     wbuf[0] = L'\0';
@@ -1369,7 +1369,7 @@ struct dirent *readdir(DIR *d) {
     memset(&d->result, 0, sizeof(d->result));
     if (d->handle != INVALID_HANDLE_VALUE) {
       result = &d->result;
-      WideCharToMultiByte(CP_UTF8, 0, d->info.cFileName, -1, result->d_name,
+      WideCharToMultiByte(CP_ACP, 0, d->info.cFileName, -1, result->d_name,
                           sizeof(result->d_name), NULL, NULL);
       if (!FindNextFileW(d->handle, &d->info)) {
         FindClose(d->handle);
@@ -1405,8 +1405,8 @@ static void *p_open(const char *path, int flags) {
 #if MG_ARCH == MG_ARCH_WIN32
   const char *mode = flags == MG_FS_READ ? "rb" : "a+b";
   wchar_t b1[MG_PATH_MAX], b2[10];
-  MultiByteToWideChar(CP_UTF8, 0, path, -1, b1, sizeof(b1) / sizeof(b1[0]));
-  MultiByteToWideChar(CP_UTF8, 0, mode, -1, b2, sizeof(b2) / sizeof(b2[0]));
+  MultiByteToWideChar(CP_ACP, 0, path, -1, b1, sizeof(b1) / sizeof(b1[0]));
+  MultiByteToWideChar(CP_ACP, 0, mode, -1, b2, sizeof(b2) / sizeof(b2[0]));
   return (void *) _wfopen(b1, b2);
 #else
   const char *mode = flags == MG_FS_READ ? "rbe" : "a+be";  // e for CLOEXEC
