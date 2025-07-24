@@ -391,10 +391,69 @@ void mg_resolve(struct mg_connection *c, const char *url) {
   if (mg_aton(host, &c->rem)) {
     // host is an IP address, do not fire name resolution
     mg_connect_resolved(c);
-  } else {
+  }
+  else {
+#if MG_ARCH == MG_ARCH_WIN32
+    WSADATA wsaData;
+    struct addrinfo hints, * res, * ptr;
+    int status;
+    // 初始化Winsock
+    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+        printf("WSAStartup failed.\n");
+        return;
+    }
+    memset(&hints, 0, sizeof hints); // 初始化 hints 结构体
+    hints.ai_family = AF_UNSPEC;     // AF_INET 表示 IPv4，AF_INET6 表示 IPv6，AF_UNSPEC 表示两者都可以
+    hints.ai_socktype = SOCK_STREAM; // TCP 套接字
+    hints.ai_protocol = IPPROTO_TCP; // 使用 TCP 协议
+	  char* host_str = (char*)malloc(host.len + 1);
+    if (host_str == NULL)
+    {
+      mg_error(c, "host_str malloc failed");
+      return;
+    }
+	  memcpy(host_str, host.buf, host.len);
+	  host_str[host.len] = '\0';
+    // 获取地址信息
+    if ((status = getaddrinfo(host_str, NULL, &hints, &res)) != 0) {
+      mg_error("getaddrinfo for host %s failed: %d\n", host_str, status);
+      WSACleanup();
+      free(host_str);
+      return;
+    }
+    for (ptr = res; ptr != NULL; ptr = ptr->ai_next) {
+      void* addr;
+      char addrStr[INET6_ADDRSTRLEN];
+      if (ptr->ai_family == AF_INET) 
+      { 
+        // IPv4
+        struct sockaddr_in* ipv4 = (struct sockaddr_in*)ptr->ai_addr;
+        addr = &(ipv4->sin_addr);
+        c->rem.is_ip6 = false;
+        memcpy(&c->rem.ip, &ipv4->sin_addr, 4);
+      }
+      else
+      { 
+        // IPv6
+        struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)ptr->ai_addr;
+        addr = &(ipv6->sin6_addr);
+        c->rem.is_ip6 = true;
+        memcpy(&c->rem.ip, &ipv6->sin6_addr, 16);
+      }
+      // 将地址转换为字符串形式并打印
+      inet_ntop(ptr->ai_family, addr, addrStr, sizeof addrStr);
+      MG_VERBOSE(("Host %s has resolved to %s", host_str, addrStr));
+      break;
+    }
+    free(host_str);
+    freeaddrinfo(res);
+    WSACleanup();
+    mg_connect_resolved(c);
+#else
     // host is not an IP, send DNS resolution request
     struct mg_dns *dns = c->mgr->use_dns6 ? &c->mgr->dns6 : &c->mgr->dns4;
     mg_sendnsreq(c, &host, c->mgr->dnstimeout, dns, c->mgr->use_dns6);
+#endif
   }
 }
 
