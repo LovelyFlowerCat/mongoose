@@ -9,7 +9,8 @@ CWD ?= $(realpath $(CURDIR))
 ROOT_DIR = $(realpath $(CWD)/..)
 ENV ?=  -e Tmp=. -e WINEDEBUG=-all
 DOCKER_BIN ?= docker
-DOCKER ?= $(DOCKER_BIN) run --platform linux/amd64 --rm $(ENV) -v $(ROOT_DIR):$(ROOT_DIR) -w $(CWD)
+# use net=host so all tests have the same network and can access localhost and ad hoc services
+DOCKER ?= $(DOCKER_BIN) run --platform linux/amd64 --net=host --rm $(ENV) -v $(ROOT_DIR):$(ROOT_DIR) -w $(CWD)
 VCFLAGS ?= /nologo /W3 /O2 /MD /I.
 IPV6 ?= 1
 ASAN ?= -fsanitize=address,undefined,alignment -fno-sanitize-recover=all -fno-omit-frame-pointer -fno-common
@@ -90,9 +91,18 @@ mip_tap_test: mip_tap_test.c mongoose.c mongoose.h packed_fs.c Makefile tls_mult
 	$(CC) mip_tap_test.c packed_fs.c $(CFLAGS) $(LDFLAGS) -o $@
 	ASAN_OPTIONS=$(ASAN_OPTIONS) $(RUN) ./$@
 
+# bridge UDP port <--> TAP interface
+port_tap_bridge: port_tap_bridge.c
+	cc port_tap_bridge.c -o $@
+
+# requires port_tap_bridge to be running
+mip_port_test: mip_port_test.c mongoose.c mongoose.h packed_fs.c Makefile tls_multirec/server
+	$(CC) mip_port_test.c packed_fs.c $(CFLAGS) $(LDFLAGS) -o $@
+	ASAN_OPTIONS=$(ASAN_OPTIONS) $(RUN) ./$@
+
 mip_vc98: mip_test.c mongoose.c mongoose.h packed_fs.c Makefile
 	$(DOCKER) mdashnet/vc98 wine cl mip_test.c packed_fs.c $(VCFLAGS) $(DEFS) $(TFLAGS) /Fe$@.exe
-	$(DOCKER) mdashnet/vc98 wine $@.exe
+	$(DOCKER) -e WINEPREFIX=/tmp/wineprefix mdashnet/vc98 wine $@.exe
 
 packed_fs.c: Makefile data/ssi.h fuzz.c data/a.txt data/ca.pem certs/ca.crt certs/server.crt certs/server.key
 	$(CC) $(CFLAGS) pack.c -o pack
@@ -116,7 +126,7 @@ unamalgamated: $(HDRS) Makefile packed_fs.c
 fuzz: ASAN = -fsanitize=fuzzer,signed-integer-overflow,address,undefined
 fuzz: mongoose.c mongoose.h Makefile fuzz.c
 	$(CC) fuzz.c $(OPTS) $(WARN) $(INCS) $(TFLAGS) $(ASAN) -o fuzzer
-	$(RUN) ./fuzzer
+	$(RUN) ./fuzzer $(ARGS)
 
 FUZZDATA ?= /tmp/fuzzdata
 fuzz2: mongoose.c mongoose.h Makefile fuzz.c
@@ -126,7 +136,11 @@ fuzz2: mongoose.c mongoose.h Makefile fuzz.c
 fuzz_tls: ASAN = -fsanitize=fuzzer,signed-integer-overflow,address,undefined
 fuzz_tls: mongoose.c mongoose.h Makefile fuzz_tls.c
 	$(CC) fuzz_tls.c $(OPTS) $(WARN) $(INCS) $(TFLAGS) $(ASAN) -o fuzzer_tls
-	$(RUN) ./fuzzer_tls -max_len=17000
+	$(RUN) ./fuzzer_tls -max_len=17000 $(ARGS)
+
+fuzz_tls2: mongoose.c mongoose.h Makefile fuzz_tls.c
+	$(CC) fuzz_tls.c -DMAIN $(OPTS) $(WARN) $(ASAN) $(INCS) -o fuzzer_tls
+	$(RUN) ./fuzzer_tls $(FUZZDATA)
 
 
 
@@ -164,18 +178,32 @@ misra:
 	cppcheck --addon=misra --clang -DMG_ENABLE_LINES=1 -DMG_ENABLE_SSI=1 mongoose.c  >>/tmp/x 2>&1
 	less /tmp/x
 
+# https://ddanilov.me/how-signals-are-handled-in-a-docker-container
 armhf: ASAN=
 armhf: IPV6=0
 armhf: CC = $(DOCKER) mdashnet/armhf cc
-armhf: RUN = $(DOCKER) mdashnet/armhf
+armhf: RUN = $(DOCKER) --init mdashnet/armhf
 armhf: test
 
 s390: ASAN=
 s390: IPV6=0
 s390: CFLAGS += -Wno-stringop-overflow
 s390: CC = $(DOCKER) mdashnet/s390 cc
-s390: RUN = $(DOCKER) mdashnet/s390
+s390: RUN = $(DOCKER) --init mdashnet/s390
 s390: test
+
+mip_s390: ASAN=
+mip_s390: CC = $(DOCKER) mdashnet/s390 cc
+mip_s390: RUN = $(DOCKER) --init mdashnet/s390
+mip_s390: mip_test
+
+mip_port_s390: ASAN=
+mip_port_s390: IPV6=0
+# This test requires curl, not present in this image
+mip_port_s390: CFLAGS += -DNO_HTTPSERVER_TEST
+mip_port_s390: CC = $(DOCKER) mdashnet/s390 cc
+mip_port_s390: RUN = $(DOCKER) --init mdashnet/s390
+mip_port_s390: mip_port_test
 
 arm: DEFS += -DMG_ENABLE_POSIX_FS=0 -DMG_ENABLE_TCPIP=1 -DMG_ENABLE_TCPIP_DRIVER_INIT=0 -DMG_ARCH=MG_ARCH_ARMGCC -DNO_SLEEP_ABORT
 arm: mongoose.h $(SRCS)
@@ -187,7 +215,7 @@ riscv: mongoose.h $(SRCS)
 
 vc98: Makefile mongoose.h $(SRCS)
 	$(DOCKER) mdashnet/vc98 wine cl $(SRCS) $(VCFLAGS) $(DEFS) $(TFLAGS) /Fe$@.exe
-	$(DOCKER) mdashnet/vc98 wine $@.exe
+	$(DOCKER) -e WINEPREFIX=/tmp/wineprefix mdashnet/vc98 wine $@.exe
 
 vc17: Makefile mongoose.h $(SRCS)
 	$(DOCKER) mdashnet/vc17 wine64 cl $(SRCS) $(VCFLAGS) $(DEFS) $(TFLAGS) /Fe$@.exe
@@ -198,11 +226,12 @@ vc22: Makefile mongoose.h $(SRCS)
 	$(DOCKER) mdashnet/vc22 wine64 $@.exe
 
 mingw: Makefile mongoose.h $(SRCS)
-	$(DOCKER) mdashnet/mingw x86_64-w64-mingw32-gcc $(SRCS) -W -Wall -Werror -I. $(DEFS) -lwsock32 -lbcrypt -o $@.exe
+	$(DOCKER) mdashnet/mingw x86_64-w64-mingw32-gcc $(SRCS) -W -Wall -Werror -I. $(DEFS) $(TFLAGS) -lws2_32 -lbcrypt -o $@.exe
 	$(DOCKER) mdashnet/mingw wine64 $@.exe
 
 mingw++: Makefile mongoose.h $(SRCS)
-	$(DOCKER) mdashnet/mingw x86_64-w64-mingw32-g++ $(SRCS) -W -Wall -Werror -I. $(DEFS) -lwsock32 -lbcrypt -o $@.exe
+	$(DOCKER) mdashnet/mingw x86_64-w64-mingw32-g++ $(SRCS) -W -Wall -Werror -I. $(DEFS) $(TFLAGS) -lws2_32 -lbcrypt -o $@.exe
+	@echo "NOT RUNNING"
 
 linux-libs: CFLAGS += -fPIC
 linux-libs: LDFLAGS += -Wl,-soname,libmongoose.so.$(VERSION)
@@ -222,11 +251,12 @@ mongoose.c: Makefile $(wildcard ../src/*.c) $(wildcard ../src/drivers/*.c)
 	cd .. && (export LC_ALL=C ; cat src/license.h; echo; echo '#include "mongoose.h"' ; (for F in src/*.c src/drivers/*.c ; do echo; echo '#ifdef MG_ENABLE_LINES'; echo "#line 1 \"$$F\""; echo '#endif'; cat $$F | sed -e 's,#include ".*,,'; done))> $@
 
 mongoose.h: $(HDRS) Makefile
-	cd .. && (cat src/license.h; echo; echo '#ifndef MONGOOSE_H'; echo '#define MONGOOSE_H'; echo; cat src/version.h ; echo; echo '#ifdef __cplusplus'; echo 'extern "C" {'; echo '#endif'; cat src/arch.h src/arch_*.h src/net_ft.h src/net_lwip.h src/net_rl.h src/config.h src/profile.h src/str.h src/queue.h src/fmt.h src/printf.h src/log.h src/timer.h src/fs.h src/util.h src/url.h src/iobuf.h src/base64.h src/md5.h src/sha1.h src/sha256.h src/event.h src/net.h src/http.h src/ssi.h src/tls.h src/tls_x25519.h src/tls_aes128.h src/tls_uecc.h src/tls_chacha20.h src/tls_rsa.h src/tls_mbed.h src/tls_openssl.h src/ws.h src/sntp.h src/mqtt.h src/dns.h src/json.h src/rpc.h src/ota.h src/flash.h src/wifi.h src/net_builtin.h src/drivers/*.h | sed -e '/keep/! s,#include ".*,,' -e 's,^#pragma once,,'; echo; echo '#ifdef __cplusplus'; echo '}'; echo '#endif'; echo '#endif  // MONGOOSE_H')> $@
+	cd .. && (cat src/license.h; echo; echo '#ifndef MONGOOSE_H'; echo '#define MONGOOSE_H'; echo; cat src/version.h ; echo; echo '#ifdef __cplusplus'; echo 'extern "C" {'; echo '#endif'; cat src/arch.h src/arch_*.h src/net_ft.h src/net_lwip.h src/net_rl.h src/config.h src/profile.h src/str.h src/queue.h src/fmt.h src/printf.h src/log.h src/timer.h src/fs.h src/util.h src/url.h src/iobuf.h src/base64.h src/md5.h src/sha1.h src/sha256.h src/event.h src/net.h src/http.h src/ssi.h src/tls.h src/tls_x25519.h src/tls_aes128.h src/tls_uecc.h src/tls_chacha20.h src/tls_rsa.h src/tls_mbed.h src/tls_openssl.h src/ws.h src/sntp.h src/mqtt.h src/dns.h src/json.h src/rpc.h src/ota.h src/flash.h src/wifi.h src/l2.h src/net_builtin.h src/drivers/*.h | sed -e '/keep/! s,#include ".*,,' -e 's,^#pragma once,,'; echo; echo '#ifdef __cplusplus'; echo '}'; echo '#endif'; echo '#endif  // MONGOOSE_H')> $@
 
 
 clean: clean_tutorials clean_tutorials_embedded
 	rm -rf $(PROG) *.exe *.o *.dSYM *_test ut fuzzer *.gcov *.gcno *.gcda *.obj *.exe *.ilk *.pdb slow-unit* _CL_* infer-out data.txt crash-* packed_fs.c pack
+	$(MAKE) -C tls_multirec $@
 	#find tutorials -maxdepth 3 -name zephyr -prune -o -name Makefile -print | xargs dirname | xargs -n1 make clean -C
 
 

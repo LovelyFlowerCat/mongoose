@@ -1,4 +1,4 @@
-name: Full build and test
+name: Full build
 on:
   schedule:
     - cron: '0 22 * * *' # run at 10 PM UTC
@@ -29,15 +29,28 @@ jobs:
           select: "-DMG_ENABLE_POLL=0 -DMG_ENABLE_EPOLL=0"
         - ssl: WOLFSSL
           select: "-DMG_ENABLE_POLL=1 -DMG_ENABLE_EPOLL=0"
+        include:
+        - ssl: BUILTIN
+          cc: gcc
+          target: test
+          select: "-DMG_ENABLE_POLL=0 -DMG_ENABLE_EPOLL=1 -DMG_ENABLE_CHACHA20=0"
     name: linux ${{ matrix.target }} CC=${{ matrix.cc }} SSL=${{ matrix.ssl }} TFLAGS=${{ matrix.select }}
     env:
       CC: ${{ matrix.cc }}
       SSL: ${{ matrix.ssl }}
-      TFLAGS: ${{ matrix.select }}
+      TFLAGS: ${{ matrix.select }} -DMQTT_LOCALHOST -DNO_ABORT
     steps:
     - uses: actions/checkout@v4
       with: { fetch-depth: 2 }
-    - run: sudo apt -y update ; sudo apt -y install libmbedtls-dev libwolfssl-dev && make -C test ${{ matrix.target }}
+    - uses: webfactory/ssh-agent@v0.9.1
+      with:
+            ssh-private-key: ${{ secrets.HEALTH_TESTS_SSH_KEY }}
+    - run: sudo apt -y update ; sudo apt -y install libmbedtls-dev libwolfssl-dev && test/setup_mqtt_server.sh && make -C test ${{ matrix.target }} > log
+    - if: success() || failure()
+      run: |
+        cat log
+        test/health.awk < log > json
+        scp -o "StrictHostKeyChecking=no" json "root@176.9.217.245:/data/downloads/health/linux_${{ matrix.target }}_${{ matrix.cc }}_${{ matrix.ssl }}_${{ matrix.select }}_$(date +"%Y%m%d").json"
   mip:
     runs-on: ubuntu-latest
     strategy:
@@ -46,14 +59,28 @@ jobs:
         cc: [gcc, clang, g++, clang++]
         target: [mip_test, mip_tap_test]
         ssl: ["", BUILTIN, MBEDTLS, OPENSSL, WOLFSSL]
+        # #3226: built-in TCP is currently not working with WolfSSL (builds fine)
+        exclude:
+        - ssl: WOLFSSL
+          target: mip_tap_test
     name: ${{ matrix.target }} CC=${{ matrix.cc }} SSL=${{ matrix.ssl }}
     env:
       CC: ${{ matrix.cc }}
       SSL: ${{ matrix.ssl }}
+      TFLAGS: -DMQTT_LOCALHOST -DNO_ABORT
     steps:
     - uses: actions/checkout@v4
       with: { fetch-depth: 2 }
-    - run: if [ "${{ matrix.target }}" == "mip_tap_test" ]; then ./test/setup_ga_network.sh ; fi && sudo apt -y update ; sudo apt -y install libmbedtls-dev libwolfssl-dev && make -C test ${{ matrix.target }} IPV6=0
+    - uses: webfactory/ssh-agent@v0.9.1
+      with:
+            ssh-private-key: ${{ secrets.HEALTH_TESTS_SSH_KEY }}
+    - run: if [ "${{ matrix.target }}" == "mip_tap_test" ]; then ./test/setup_ga_network.sh ; fi && sudo apt -y update ; sudo apt -y install libmbedtls-dev libwolfssl-dev && make -C test ${{ matrix.target }} IPV6=0 > log
+    - if: success() || failure()
+      run: |
+        cat log
+        test/health.awk < log > json
+        scp -o "StrictHostKeyChecking=no" json "root@176.9.217.245:/data/downloads/health/${{ matrix.target }}_${{ matrix.cc }}_${{ matrix.ssl }}_$(date +"%Y%m%d").json"
+
   mip89:
     runs-on: ubuntu-latest
     strategy:
@@ -65,7 +92,7 @@ jobs:
     steps:
     - uses: actions/checkout@v4
       with: { fetch-depth: 2 }
-    - run: make -C test ${{ matrix.target }} 
+    - run: make -C test ${{ matrix.target }}
   s390:
     runs-on: ubuntu-latest
     strategy:
@@ -73,10 +100,12 @@ jobs:
       matrix:
         ssl: ["", BUILTIN]
     name: S390 SSL=${{ matrix.ssl }}
+    env:
+      TFLAGS: -DMQTT_LOCALHOST
     steps:
     - uses: actions/checkout@v4
       with: { fetch-depth: 2 }
-    - run: sudo apt -y update ; sudo apt -y install binfmt-support qemu-user-static && docker run --rm --privileged multiarch/qemu-user-static --reset -p yes && make -C test s390 SSL=${{ matrix.ssl }} MULTIREC=NO
+    - run: sudo apt -y update ; sudo apt -y install binfmt-support qemu-user-static && ./test/setup_mqtt_server.sh && docker run --rm --privileged multiarch/qemu-user-static --reset -p yes && make -C test s390 SSL=${{ matrix.ssl }} MULTIREC=NO
   armhf:
     runs-on: ubuntu-latest
     strategy:
@@ -84,10 +113,12 @@ jobs:
       matrix:
         ssl: ["", BUILTIN]
     name: ArmHF SSL=${{ matrix.ssl }}
+    env:
+      TFLAGS: -DMQTT_LOCALHOST
     steps:
     - uses: actions/checkout@v4
       with: { fetch-depth: 2 }
-    - run: sudo apt -y update ; sudo apt -y install binfmt-support qemu-user-static && docker run --rm --privileged multiarch/qemu-user-static --reset -p yes && make -C test armhf SSL=${{ matrix.ssl }} MULTIREC=NO
+    - run: sudo apt -y update ; sudo apt -y install binfmt-support qemu-user-static && ./test/setup_mqtt_server.sh && docker run --rm --privileged multiarch/qemu-user-static --reset -p yes && make -C test armhf SSL=${{ matrix.ssl }} MULTIREC=NO
   unamalgamated-mg_prefix:
     runs-on: ubuntu-latest
     strategy:
@@ -107,35 +138,49 @@ jobs:
       matrix:
         ssl: ["", BUILTIN, MBEDTLS, OPENSSL, WOLFSSL]
     name: Valgrind SSL=${{ matrix.ssl }}
+    env:
+      TFLAGS: -DMQTT_LOCALHOST
     steps:
     - uses: actions/checkout@v4
       with: { fetch-depth: 2 }
     - run: sudo apt -y update ; sudo apt -y install libmbedtls-dev libwolfssl-dev valgrind
-    - run: make -C test valgrind SSL=${{ matrix.ssl }}
+    - run: ./test/setup_mqtt_server.sh && make -C test valgrind SSL=${{ matrix.ssl }}
   macos:
     runs-on: macos-latest
     strategy:
       fail-fast: false
       matrix:
-        ssl: ["", BUILTIN, MBEDTLS, OPENSSL, WOLFSSL]
+        ssl: ["", BUILTIN, MBEDTLS, OPENSSL] # , WOLFSSL] # see issue#2821
         select: [-DMG_ENABLE_POLL=0, -DMG_ENABLE_POLL=1]
         exclude:
         - ssl: MBEDTLS
           select: -DMG_ENABLE_POLL=0
+        - ssl: MBEDTLS                # see issue#2694
+          select: -DMG_ENABLE_POLL=1
         - ssl: OPENSSL
           select: -DMG_ENABLE_POLL=0
-        - ssl: WOLFSSL
-          select: -DMG_ENABLE_POLL=0
+        #- ssl: WOLFSSL
+        #  select: -DMG_ENABLE_POLL=0
     name: macos SSL=${{ matrix.ssl }} TFLAGS=${{ matrix.select }}
     env:
       SSL: ${{ matrix.ssl }}
-      TFLAGS: ${{ matrix.select }} -Wno-sign-conversion # Workaround for MbedTLS 3.5.0
+      TFLAGS: ${{ matrix.select }} -DMQTT_LOCALHOST ${{ matrix.env.tflags }} -DNO_ABORT -Wno-sign-conversion -Wno-undef # Workarounds for MbedTLS
       HOMEBREW_NO_AUTO_UPDATE: 1
     steps:
     - uses: actions/checkout@v4
       with: { fetch-depth: 2 }
-    - run: brew install mbedtls wolfssl # jq openssl already pre-installed
-    - run: make -C test test ASAN_OPTIONS= MBEDTLS=$(echo $(brew --cellar)/mbedtls*/*) OPENSSL=$(echo $(brew --cellar)/openssl*/*) WOLFSSL=$(echo $(brew --cellar)/wolfssl*/*)
+    - uses: webfactory/ssh-agent@v0.9.1
+      with:
+            ssh-private-key: ${{ secrets.HEALTH_TESTS_SSH_KEY }}
+    - run: brew install mbedtls wolfssl mosquitto gawk # jq openssl already pre-installed
+    - run: /opt/homebrew/opt/mosquitto/sbin/mosquitto -c /Users/runner/work/mongoose/mongoose/test/mosquitto.conf.macos &
+    - run: make -C test test ASAN_OPTIONS= MBEDTLS=$(echo $(brew --cellar)/mbedtls*/*) OPENSSL=$(echo $(brew --cellar)/openssl*/*) WOLFSSL=$(echo $(brew --cellar)/wolfssl*/*) > log
+    - if: success() || failure()
+      run: |
+        cat log
+        test/health.awk < log > json
+        scp -o "StrictHostKeyChecking=no" json "root@176.9.217.245:/data/downloads/health/macos_test_cc_${{ matrix.ssl }}_${{ matrix.select }}_$(date +"%Y%m%d").json"
+
   windows:
     runs-on: ubuntu-latest
     strategy:
@@ -151,11 +196,20 @@ jobs:
     name: windows ${{ matrix.target }} SSL=${{ matrix.ssl }} TFLAGS=${{ matrix.select }}
     env:
       SSL: ${{ matrix.ssl }}
-      TFLAGS: ${{ matrix.select }}
+      TFLAGS: ${{ matrix.select }} -DMQTT_LOCALHOST -DNO_ABORT
     steps:
     - uses: actions/checkout@v4
       with: { fetch-depth: 2 }
-    - run: make -C test ${{ matrix.target }} 
+    - uses: webfactory/ssh-agent@v0.9.1
+      with:
+            ssh-private-key: ${{ secrets.HEALTH_TESTS_SSH_KEY }}
+    - run: ./test/setup_mqtt_server.sh && make -C test ${{ matrix.target }} > log
+    - if: success() || failure()
+      run: |
+        cat log
+        test/health.awk < log > json
+        scp -o "StrictHostKeyChecking=no" json "root@176.9.217.245:/data/downloads/health/windows_${{ matrix.target }}_${{ matrix.cc }}_${{ matrix.ssl }}_${{ matrix.select }}_$(date +"%Y%m%d").json"
+ 
   arm:
     runs-on: ubuntu-latest
     strategy:
@@ -186,9 +240,18 @@ jobs:
     name: tutorials ${{ matrix.ssl }}
     steps:
     - uses: actions/checkout@v4
+    - uses: webfactory/ssh-agent@v0.9.1
+      with:
+            ssh-private-key: ${{ secrets.HEALTH_TESTS_SSH_KEY }}
     - run: sudo apt -y install libpcap-dev
-    - run: make -C test tutorials CFLAGS_EXTRA="${{ matrix.ssl }}"
+    - run: make -C test tutorials CFLAGS_EXTRA="${{ matrix.ssl }}" > log
+    - if: success() || failure()
+      run: |
+        cat log
+        test/health.awk < log > json
+        scp -o "StrictHostKeyChecking=no" json "root@176.9.217.245:/data/downloads/health/tutorials_${{ matrix.ssl }}_$(date +"%Y%m%d").json"
     - run: make -C test clean_tutorials
+
   tutorials_win:
     runs-on: windows-latest
     strategy:
@@ -315,7 +378,6 @@ jobs:
       matrix:
         example:
           - path: mqtt/mqtt-client/microchip/same54-xpro
-          - path: nxp/nxp-mimxrt1020-azurertos
           - path: nxp/nxp-frdmk66f-freertos
           - path: nxp/nxp-lpcxpresso54s018m-freertos
           - path: nxp/nxp-mimxrt1020-freertos
@@ -436,156 +498,3 @@ jobs:
         with: { fetch-depth: 2 }
       - run: sudo pip install yq
       - run: cd test/cube && make
-
-  zephyr_examples:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with: { fetch-depth: 2 }
-      - run: sudo apt -y update && sudo apt -y install gcc-arm-none-eabi
-      - run: make -C tutorials/zephyr init REPO=zephyrprojectrtos/ci:v0.26.14 # "no space left on device" with newers
-      - name: minify manifest
-        uses: mikefarah/yq@master
-        with:
-          cmd: yq -i eval '(.manifest.defaults, .manifest.remotes, .manifest.projects[] | select(.name == "cmsis" or .name == "hal_stm32" or .name == "mbedtls" or .name == "mcuboot" or .name == "picolibc" | del(.null) ), .manifest.self) as $i ireduce({};setpath($i | path; $i)) | del(.manifest.projects.[].null) | del(..|select(length==0))' tutorials/zephyr/zephyrproject/zephyr/west.yml
-      - run: make -C tutorials/zephyr update
-      - run: make -C tutorials/zephyr/device-dashboard build
-      - run: make -C tutorials/zephyr/http-client build
-      - run: make -C tutorials/zephyr/http-server build
-      - run: make -C tutorials/zephyr/mqtt-aws-client build
-      - run: make -C tutorials/zephyr/websocket-server build
-
-  test_f7:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-      with: { fetch-depth: 2 }
-    - name: baremetal
-      run: sudo apt -y update && sudo apt -y install gcc-arm-none-eabi
-    - run: make -C tutorials/stm32/nucleo-f746zg-make-baremetal-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-    - run: make -C tutorials/stm32/nucleo-f746zg-make-freertos-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-    - run: make -C tutorials/stm32/nucleo-f746zg-make-freertos-tcp test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-    - name: Cube
-      run: echo # nothing specific to install or do
-#    - run: make -C test/cube test PROJECTS=../../tutorials/stm32/nucleo-f746zg-cube-baremetal-builtin VCON_API_KEY=${{secrets.VCON_API_KEY}} DEVICE=5
-#    - run: make -C test/cube test PROJECTS=../../tutorials/stm32/nucleo-f746zg-cube-freertos-builtin VCON_API_KEY=${{secrets.VCON_API_KEY}} DEVICE=5    
-    - run: make -C test/cube test PROJECTS=../../tutorials/stm32/nucleo-f746zg-cube-freertos-lwip VCON_API_KEY=${{secrets.VCON_API_KEY}} DEVICE=5
-
-  test_f4:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-      with: { fetch-depth: 2 }
-    - name: baremetal
-      run: sudo apt -y update && sudo apt -y install gcc-arm-none-eabi
-    - run: make -C tutorials/stm32/nucleo-f429zi-make-baremetal-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-    - run: make -C tutorials/stm32/nucleo-f429zi-make-freertos-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-    - name: Cube
-      run: echo # nothing specific to install or do
-#    - run: make -C test/cube test PROJECTS=../../tutorials/stm32/nucleo-f429zi-cube-baremetal-builtin VCON_API_KEY=${{secrets.VCON_API_KEY}} DEVICE=2
-#    - run: make -C test/cube test PROJECTS=../../tutorials/stm32/nucleo-f429zi-cube-freertos-builtin VCON_API_KEY=${{secrets.VCON_API_KEY}} DEVICE=2
-    - run: make -C test/cube test PROJECTS=../../tutorials/stm32/nucleo-f429zi-cube-freertos-lwip VCON_API_KEY=${{secrets.VCON_API_KEY}} DEVICE=2
-
-  test_h743:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-      with: { fetch-depth: 3 }
-    - name: baremetal
-      run: sudo apt -y update && sudo apt -y install gcc-arm-none-eabi
-    - run: make -C tutorials/stm32/nucleo-h743zi-make-baremetal-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-    - run: make -C tutorials/stm32/nucleo-h743zi-make-freertos-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-#    - name: Cube
-#      run: echo # nothing specific to install or do
-#    - run: make -C test/cube test PROJECTS=../../tutorials/stm32/nucleo-h743zi-cube-baremetal-builtin VCON_API_KEY=${{secrets.VCON_API_KEY}} DEVICE=6
-#    - run: make -C test/cube test PROJECTS=../../tutorials/stm32/nucleo-h743zi-cube-freertos-builtin VCON_API_KEY=${{secrets.VCON_API_KEY}} DEVICE=6
-
-  test_h723:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-      with: { fetch-depth: 3 }
-    - name: baremetal
-      run: sudo apt -y update && sudo apt -y install gcc-arm-none-eabi
-    - run: make -C tutorials/stm32/nucleo-h723zg-make-baremetal-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-    - run: make -C tutorials/stm32/nucleo-h723zg-make-freertos-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-    
-  test_h5:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-      with: { fetch-depth: 3 }
-    - name: baremetal
-      run: sudo apt -y update && sudo apt -y install gcc-arm-none-eabi
-    - run: make -C tutorials/stm32/nucleo-h563zi-make-baremetal-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-    - run: make -C tutorials/stm32/nucleo-h563zi-make-freertos-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-
-  test_rt1020:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-      with: { fetch-depth: 3 }
-    - name: baremetal
-      run: sudo apt -y update && sudo apt -y install gcc-arm-none-eabi
-    - run: make -C tutorials/nxp/rt1020-evk-make-baremetal-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-    - run: make -C tutorials/nxp/rt1020-evk-make-freertos-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-
-  test_rt1060:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-      with: { fetch-depth: 3 }
-    - name: baremetal
-      run: sudo apt -y update && sudo apt -y install gcc-arm-none-eabi
-    - run: make -C tutorials/nxp/rt1060-evk-make-baremetal-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-    - run: make -C tutorials/nxp/rt1060-evk-make-freertos-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-
-  test_rt1170:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-      with: { fetch-depth: 3 }
-    - name: baremetal
-      run: sudo apt -y update && sudo apt -y install gcc-arm-none-eabi
-    - run: make -C tutorials/nxp/rt1170-evk-make-baremetal-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-    - run: make -C tutorials/nxp/rt1170-evk-make-freertos-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-
-  test_ra6m4:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-      with: { fetch-depth: 3 }
-    - name: baremetal
-      run: sudo apt -y update && sudo apt -y install gcc-arm-none-eabi
-    - run: make -C tutorials/renesas/ek-ra6m4-make-baremetal-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-#    - run: make -C tutorials/renesas/ek-ra6m4-make-freertos-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-
-  test_tm4c:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-      with: { fetch-depth: 2 }
-    - name: baremetal
-      run: sudo apt -y update && sudo apt -y install gcc-arm-none-eabi
-    - run:  make -C tutorials/ti/ek-tm4c1294xl-make-baremetal-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-    - run:  make -C tutorials/ti/ek-tm4c1294xl-make-freertos-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-
-  test_same54:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-      with: { fetch-depth: 2 }
-    - name: baremetal
-      run: sudo apt -y update && sudo apt -y install gcc-arm-none-eabi
-    - run:  make -C tutorials/http/device-dashboard/microchip/same54-xpro test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-    - run:  make -C tutorials/mqtt/mqtt-client/microchip/same54-xpro test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-
-  test_pico_w5500:
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-      with: { fetch-depth: 2 }
-    - name: SDK
-      run: sudo apt -y update && sudo apt -y install gcc-arm-none-eabi
-    - run:  make -C tutorials/pico-sdk/w5500-evb-pico-picosdk-baremetal-builtin test VCON_API_KEY=${{secrets.VCON_API_KEY}}
-

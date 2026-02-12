@@ -175,8 +175,32 @@
 #define MG_TCPIP_GW MG_IPV4(0, 0, 0, 0)  // Default is 0.0.0.0 (DHCP)
 #endif
 
+#if MG_ENABLE_IPV6
+
+#ifndef MG_TCPIP_GLOBAL
+#define MG_TCPIP_GLOBAL MG_IPV6(0, 0, 0, 0, 0, 0, 0, 0)
+#endif
+
+#ifndef MG_TCPIP_IPV6_LINKLOCAL
+#define MG_TCPIP_IPV6_LINKLOCAL MG_IPV6(0, 0, 0, 0, 0, 0, 0, 0)
+#endif
+
+#ifndef MG_TCPIP_PREFIX_LEN
+#define MG_TCPIP_PREFIX_LEN 0
+#endif
+
+#ifndef MG_TCPIP_GW6
+#define MG_TCPIP_GW6 MG_IPV6(0, 0, 0, 0, 0, 0, 0, 0)
+#endif
+
+#endif
+
 #ifndef MG_SET_MAC_ADDRESS
 #define MG_SET_MAC_ADDRESS(mac)
+#endif
+
+#ifndef MG_TCPIP_DHCPNAME_SIZE
+#define MG_TCPIP_DHCPNAME_SIZE 18  // struct mg_tcpip_if :: dhcp_name size
 #endif
 
 #ifndef MG_SET_WIFI_CONFIG
@@ -185,4 +209,8 @@
 
 #ifndef MG_ENABLE_TCPIP_PRINT_DEBUG_STATS
 #define MG_ENABLE_TCPIP_PRINT_DEBUG_STATS 0
+#endif
+
+#ifndef MG_ENABLE_CHACHA20
+#define MG_ENABLE_CHACHA20 1  // When set to 0, GCM is used. For MG_TLS_BUILTIN
 #endif

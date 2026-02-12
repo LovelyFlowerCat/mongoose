@@ -39,6 +39,7 @@ static STACK_OF(X509_INFO) * load_ca_certs(struct mg_str ca) {
 static bool add_ca_certs(SSL_CTX *ctx, STACK_OF(X509_INFO) * certs) {
   int i;
   X509_STORE *cert_store = SSL_CTX_get_cert_store(ctx);
+  if (cert_store == NULL) return false;
   for (i = 0; i < sk_X509_INFO_num(certs); i++) {
     X509_INFO *cert_info = sk_X509_INFO_value(certs, i);
     if (cert_info->x509 && !X509_STORE_add_cert(cert_store, cert_info->x509))
@@ -57,9 +58,9 @@ static EVP_PKEY *load_key(struct mg_str s) {
 static X509 *load_cert(struct mg_str s) {
   BIO *bio = BIO_new_mem_buf(s.buf, (int) (long) s.len);
   X509 *cert = bio == NULL ? NULL
-               : s.buf[0] == '-'
-                   ? PEM_read_bio_X509(bio, NULL, NULL, NULL)  // PEM
-                   : d2i_X509_bio(bio, NULL);                  // DER
+               : MG_IS_DER(s.buf)
+                   ? d2i_X509_bio(bio, NULL)                    // DER
+                   : PEM_read_bio_X509(bio, NULL, NULL, NULL);  // PEM
   if (bio) BIO_free(bio);
   return cert;
 }
@@ -258,7 +259,7 @@ size_t mg_tls_pending(struct mg_connection *c) {
 long mg_tls_recv(struct mg_connection *c, void *buf, size_t len) {
   struct mg_tls *tls = (struct mg_tls *) c->tls;
   int n = SSL_read(tls->ssl, buf, (int) len);
-  if (!c->is_tls_hs && buf == NULL && n == 0) return 0; // TODO(): MIP
+  if (!c->is_tls_hs && buf == NULL && n == 0) return 0;  // TODO(): MIP
   if (n < 0 && mg_tls_err(c, tls, n) == 0) return MG_IO_WAIT;
   if (n <= 0) return MG_IO_ERR;
   return n;

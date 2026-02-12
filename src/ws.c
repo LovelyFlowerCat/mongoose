@@ -55,7 +55,7 @@ static void ws_handshake(struct mg_connection *c, const struct mg_str *wskey,
     mg_printf(c, "Sec-WebSocket-Protocol: %.*s\r\n", (int) wsproto->len,
               wsproto->buf);
   }
-  mg_send(c, "\r\n", 2);
+  if (!mg_send(c, "\r\n", 2)) mg_error(c, "OOM");
 }
 
 static uint32_t be32(const uint8_t *p) {
@@ -173,9 +173,13 @@ static void mg_ws_cb(struct mg_connection *c, int ev, void *ev_data) {
 
     while (ws_process(c->recv.buf + ofs, c->recv.len - ofs, &msg) > 0) {
       char *s = (char *) c->recv.buf + ofs + msg.header_len;
-      struct mg_ws_message m = {{s, msg.data_len}, msg.flags};
-      size_t len = msg.header_len + msg.data_len;
-      uint8_t final = msg.flags & 128, op = msg.flags & 15;
+      struct mg_ws_message m;
+      size_t len;
+      uint8_t final, op;
+      m.data.buf = s, m.data.len = msg.data_len, m.flags = msg.flags;
+      len = msg.header_len + msg.data_len;
+      final = msg.flags & 128;
+      op = msg.flags & 15;
       // MG_VERBOSE ("fin %d op %d len %d [%.*s]", final, op,
       //                       (int) m.data.len, (int) m.data.len, m.data.buf));
       switch (op) {
@@ -292,6 +296,6 @@ size_t mg_ws_wrap(struct mg_connection *c, size_t len, int op) {
     memmove(p, p - header_len, len);             // Shift data
     memcpy(p - header_len, header, header_len);  // Prepend header
     mg_ws_mask(c, len);                          // Mask data
-  }
-  return c->send.len;
+  }  // returning 0 means an OOM condition (iobuf couldn't resize), yet this is
+  return c->send.len;  // so far recoverable, let the caller decide
 }
