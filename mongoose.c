@@ -428,7 +428,7 @@ void mg_resolve(struct mg_connection *c, const char *url) {
         struct sockaddr_in* ipv4 = (struct sockaddr_in*)ptr->ai_addr;
         addr = &(ipv4->sin_addr);
         c->rem.is_ip6 = false;
-        memcpy(&c->rem.ip, &ipv4->sin_addr, 4);
+        memcpy(&c->rem.addr.ip, &ipv4->sin_addr, 4);
       }
       else
       { 
@@ -436,7 +436,7 @@ void mg_resolve(struct mg_connection *c, const char *url) {
         struct sockaddr_in6* ipv6 = (struct sockaddr_in6*)ptr->ai_addr;
         addr = &(ipv6->sin6_addr);
         c->rem.is_ip6 = true;
-        memcpy(&c->rem.ip, &ipv6->sin6_addr, 16);
+        memcpy(&c->rem.addr.ip, &ipv6->sin6_addr, 16);
       }
       // 将地址转换为字符串形式并打印
       inet_ntop(ptr->ai_family, addr, addrStr, sizeof addrStr);
