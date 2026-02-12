@@ -398,15 +398,9 @@ void mg_resolve(struct mg_connection *c, const char *url) {
     mg_connect_resolved(c);
   }
   else {
-#if MG_ARCH == MG_ARCH_WIN32
-    WSADATA wsaData;
+#if MG_ARCH == MG_ARCH_WIN32 || MG_ARCH == MG_ARCH_UNIX || MG_ARCH == MG_ARCH_ESP32
     struct addrinfo hints, * res, * ptr;
     int status;
-    // 初始化Winsock
-    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-        printf("WSAStartup failed.\n");
-        return;
-    }
     memset(&hints, 0, sizeof hints); // 初始化 hints 结构体
     hints.ai_family = AF_UNSPEC;     // AF_INET 表示 IPv4，AF_INET6 表示 IPv6，AF_UNSPEC 表示两者都可以
     hints.ai_socktype = SOCK_STREAM; // TCP 套接字
@@ -421,8 +415,7 @@ void mg_resolve(struct mg_connection *c, const char *url) {
 	  host_str[host.len] = '\0';
     // 获取地址信息
     if ((status = getaddrinfo(host_str, NULL, &hints, &res)) != 0) {
-      mg_error("getaddrinfo for host %s failed: %d\n", host_str, status);
-      WSACleanup();
+      mg_error(c, "getaddrinfo for host %s failed: %d\n", host_str, status);
       free(host_str);
       return;
     }
@@ -452,7 +445,6 @@ void mg_resolve(struct mg_connection *c, const char *url) {
     }
     free(host_str);
     freeaddrinfo(res);
-    WSACleanup();
     mg_connect_resolved(c);
 #else
     // host is not an IP, send DNS resolution request
