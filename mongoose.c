@@ -10466,10 +10466,10 @@ long mg_io_send(struct mg_connection *c, const void *buf, size_t len) {
   if (c->is_udp) {
     union usa usa;
     socklen_t slen = tousa(&c->rem, &usa);
-    n = sendto(FD(c), (char *) buf, len, 0, &usa.sa, slen);
+    n = sendto(FD(c), (char *) buf, (int)len, 0, &usa.sa, slen);
     if (n > 0) setlocaddr(FD(c), &c->loc);
   } else {
-    n = send(FD(c), (char *) buf, len, MSG_NONBLOCKING);
+    n = send(FD(c), (char *) buf, (int)len, MSG_NONBLOCKING);
   }
   MG_VERBOSE(("%lu %ld %d", c->id, n, MG_SOCK_ERR(n)));
   if (MG_SOCK_PENDING(n)) return MG_IO_WAIT;
@@ -10616,10 +10616,10 @@ static long recv_raw(struct mg_connection *c, void *buf, size_t len) {
   if (c->is_udp) {
     union usa usa;
     socklen_t slen = tousa(&c->rem, &usa);
-    n = recvfrom(FD(c), (char *) buf, len, 0, &usa.sa, &slen);
+    n = recvfrom(FD(c), (char *) buf, (int)len, 0, &usa.sa, &slen);
     if (n > 0) tomgaddr(&usa, &c->rem, slen != sizeof(usa.sin));
   } else {
-    n = recv(FD(c), (char *) buf, len, MSG_NONBLOCKING);
+    n = recv(FD(c), (char *) buf, (int)len, MSG_NONBLOCKING);
   }
   MG_VERBOSE(("%lu %ld %d", c->id, n, MG_SOCK_ERR(n)));
   if (MG_SOCK_PENDING(n)) return MG_IO_WAIT;
@@ -11065,7 +11065,7 @@ bool mg_wakeup(struct mg_mgr *mgr, unsigned long conn_id, const void *buf,
     char *extended_buf = (char *) alloca(len + sizeof(conn_id));
     memcpy(extended_buf, &conn_id, sizeof(conn_id));
     memcpy(extended_buf + sizeof(conn_id), buf, len);
-    send(mgr->pipe, extended_buf, len + sizeof(conn_id), MSG_NONBLOCKING);
+    send(mgr->pipe, extended_buf, (int)(len + sizeof(conn_id)), MSG_NONBLOCKING);
     return true;
   }
   return false;
